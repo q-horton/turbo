@@ -1,17 +1,20 @@
 use std::env;
  
+use ::serenity::all::EmojiId;
 use serenity::async_trait;
-use serenity::model::channel::Message;
+use serenity::model::channel::{Message, ReactionType};
 use serenity::model::gateway::Ready;
 use poise::serenity_prelude as serenity;
+use serenity::builder::{CreateMessage, CreateAttachment};
 
 mod text;
+use text::{COMMAND_UNDER_REPAIR, HELP_MESSAGE};
 
 mod utilities;
 use utilities::{Data, Error, Context};
 
-struct Handler;
 
+struct Handler;
 
 #[async_trait]
 impl serenity::EventHandler for Handler {
@@ -24,10 +27,28 @@ impl serenity::EventHandler for Handler {
             return;
         }
 
-        if msg.content.contains("codeword") {
-            if let Err(why) = msg.reply_ping(&ctx.http, "You said the codeword!").await {
-                println!("Error sending message: {:?}", why);
-            }
+        if msg.content.to_lowercase().split_whitespace().any(|word| word == "rust") {
+            let rustacean_id = env::var("RUSTACEAN_EMOJI_ID")
+                .expect("Expected an emoji ID in the environment")
+                .parse::<u64>()
+                .unwrap();
+            let rustacean = ReactionType::Custom {
+                animated: false,
+                id: EmojiId::new(rustacean_id),
+                name: Some("rustacean".to_string())
+            };
+            let _ = msg.react(&ctx, rustacean).await;
+        }
+
+        if msg.content.to_lowercase().split_whitespace().any(|word| word == "uqcsbot") {
+            let image = CreateAttachment::path("res/DunkedOn.jpg").await.unwrap();
+            let text = "What are you talking about that punk <@814086324709359648> for?";
+            let msg_reply = CreateMessage::default()
+                .content(text)
+                .add_file(image)
+                .reference_message(&msg);
+            
+            let _ = msg.channel_id.send_message(&ctx, msg_reply).await;
         }
 
     }
@@ -42,25 +63,6 @@ impl serenity::EventHandler for Handler {
         println!("{} is connected!", ready.user.name);
     }
 }
-
-// Messages
-const HELP_MESSAGE: &str = "
-Our enemies may rest but rust never sleeps.
-
-Hi! You're looking for help, so am I!
-If you want a feature added or fixed, make a pull request or raise an issue.
-Unsure how to constribute? Ask the friendly team! Check out my source code: https://github.com/uqmars/turbo
-
-Games:
-    pong        The game pong
-
-Text:
-    banter      Just a bit of banter!
-    roll        Defaults 1d20.
-                !roll [max] [min] [range]
-";
-
-const COMMAND_UNDER_REPAIR: &str = "This command is currently being fixed. Hold tight!";
 
 /// Displays the help message
 #[poise::command(slash_command, prefix_command)]
@@ -84,16 +86,32 @@ async fn banter(
 #[poise::command(slash_command, prefix_command)]
 async fn roll(
     ctx: Context<'_>,
+    max: Option<i32>,
+    min: Option<i32>
 ) -> Result<(), Error> {
-    ctx.say(text::roll(None, None, None).as_str()).await?;
+    ctx.say(text::roll(max, min).as_str()).await?;
     Ok(())
 }
 
 /// Actions the voteythumbs command
-#[poise::command(slash_command, prefix_command,
-    context_menu_command = "Votey Thumbs",
-    ephemeral = true)]
+#[poise::command(slash_command, prefix_command)]
 async fn voteythumbs(
+    ctx: Context<'_>,
+    msg: Option<String>
+) -> Result<(), Error> {
+    let msg_text: String = match msg {
+        Some(x) => x,
+        None => format!("{} has created a vote", ctx.author().display_name()),
+    };
+    let post = ctx.say(msg_text).await?;
+    utilities::voty(&ctx, post.message().await?.as_ref()).await?;
+    Ok(())
+}
+
+/// Actions the voteythumbs application command
+#[poise::command(ephemeral = true,
+    context_menu_command = "Votey Thumbs")]
+async fn votey(
     ctx: Context<'_>,
     msg: serenity::Message,
 ) -> Result<(), Error> {
@@ -123,7 +141,7 @@ async fn members(
         return Ok(());
     }
     
-    let response: String = text::memberships().await.unwrap();
+    let response: String = utilities::memberships().await.unwrap();
     ctx.say(response.as_str()).await?;
     Ok(())
 }
@@ -146,6 +164,7 @@ async fn main() {
                 help(),
                 banter(),
                 roll(),
+                votey(),
                 voteythumbs(),
                 aoc(),
                 members()

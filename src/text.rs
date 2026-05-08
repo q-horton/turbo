@@ -1,9 +1,25 @@
-use std::env;
-use serde_json::Value;
-
 use rand::prelude::*;
 
 /// Commands which has text-based responses
+// Messages
+pub const HELP_MESSAGE: &str = "
+Our enemies may rest but rust never sleeps.
+
+Hi! You're looking for help, so am I!
+If you want a feature added or fixed, make a pull request or raise an issue.
+Unsure how to constribute? Ask the friendly team! Check out my source code: https://github.com/uqmars/turbo
+
+Games:
+    pong        The game pong
+
+Text:
+    banter      Just a bit of banter!
+    roll        Defaults 1d20.
+                !roll [max] [min]
+";
+
+pub const COMMAND_UNDER_REPAIR: &str = "This command is currently being fixed. Hold tight!";
+
 
 /// Banter Command 
 ///
@@ -44,45 +60,17 @@ pub fn banter() -> String {
 /// Uses:
 ///     !roll
 ///     !roll [max]
-///     !roll [min] [max]
+///     !roll [max] [min]
 
-pub fn roll(max: Option<i32>, min: Option<i32>, range: Option<i32>) -> String {
+pub fn roll(max: Option<i32>, min: Option<i32>) -> String {
     let max: i32 = max.unwrap_or(20);
     let min: i32 = min.unwrap_or(1);
-    let range: i32 = range.unwrap_or(1);
-    let mut collection: Vec<i32> = (1..range).collect();
-    let mut number = rand::thread_rng().gen_range(min..max);
+    let number: i32;
+    if max >= min {
+        number = rand::thread_rng().gen_range(min..max);
+    } else {
+        number = rand::thread_rng().gen_range(max..min);
+    }
 
-    // Range selection not working due to type errors.
-    let selection: String = collection.iter()
-        .map(|&collection| collection.to_string() + " ")
-        .collect();
-
-    return number.to_string();
-}
-
-/// Memberships command
-///
-/// Pulls current membership count and quorum, returning them as a string.
-pub async fn memberships() -> Result<String, reqwest::Error> {
-    let sheet_id = env::var("MEMBER_STATS_SHEET_ID").expect("Expected a google sheet ID in the environment");
-    let cell_id = env::var("MEMBER_STATS_CELL").expect("Expected a google sheet cell ID in the environment");
-    let sheets_api = env::var("GOOGLE_SHEETS_API_KEY").expect("Expected a google sheets API key in the environment");
-    let membership_url: String = format!("https://sheets.googleapis.com/v4/spreadsheets/{}/values/{}?key={}", sheet_id, cell_id, sheets_api);
-    let resp = reqwest::get(membership_url)
-        .await?
-        .text()
-        .await?;
-
-    let parsed: Value = serde_json::from_str(&resp).unwrap();
-
-    // Access fields using square brackets
-    let val_a = &parsed["values"][0].get(0).unwrap();
-    let members: i32 = val_a.as_str().unwrap().parse().unwrap();
-    let val_b = &parsed["values"][1].get(0).unwrap();
-    let quorum: i32 = val_b.as_str().unwrap().parse().unwrap();
-
-    let msg: String = format!("There are currently {members} members of UQ MARS, making the current quorum {quorum}");
-    println!("{msg}");
-    Ok(msg)
+    number.to_string()
 }
