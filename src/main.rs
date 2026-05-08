@@ -8,12 +8,10 @@ use poise::serenity_prelude as serenity;
 mod text;
 
 mod utilities;
+use utilities::{Data, Error, Context};
 
 struct Handler;
 
-struct Data {} // User data, which is stored and accessible in all command invocations
-type Error = Box<dyn std::error::Error + Send + Sync>;
-type Context<'a> = poise::Context<'a, Data, Error>;
 
 #[async_trait]
 impl serenity::EventHandler for Handler {
@@ -92,11 +90,16 @@ async fn roll(
 }
 
 /// Actions the voteythumbs command
-#[poise::command(slash_command, prefix_command)]
+#[poise::command(slash_command, prefix_command,
+    context_menu_command = "Votey Thumbs",
+    ephemeral = true)]
 async fn voteythumbs(
     ctx: Context<'_>,
+    msg: serenity::Message,
 ) -> Result<(), Error> {
-    ctx.say(COMMAND_UNDER_REPAIR).await?;
+    utilities::voty(&ctx, &msg).await?;
+    let response = format!("Reactions added to message from {}", msg.author.display_name());
+    ctx.say(response).await?;
     Ok(())
 }
 

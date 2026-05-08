@@ -1,18 +1,18 @@
-use serenity::async_trait;
 use serenity::model::channel::*;
-use serenity::model::gateway::Ready;
-use serenity::prelude::*;
+use poise::serenity_prelude as serenity;
 
-use rand::prelude::*;
+pub struct Data {} // User data, which is stored and accessible in all command invocations
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
+pub type Context<'a> = poise::Context<'a, Data, Error>;
 
 /// Votey Thumbs
 ///
 /// A completely original idea
-pub async fn voty(ctx: Context, msg: Message) {
-    let thumbsup = ReactionType::Unicode(r"\u0001f44d".to_string());
-    let thumbsdown = ReactionType::Unicode(r"\U0001f44e".to_string());
-    
+pub async fn voty(ctx: &Context<'_>, msg: &serenity::Message) -> Result<(), Error> {
+    let thumbsup = ReactionType::Unicode("👍".to_string());
+    let thumbsdown = ReactionType::Unicode("👎".to_string());
 
-    msg.react(&ctx, thumbsup).await;
-    msg.react(&ctx, thumbsdown).await;
+    msg.react(ctx, thumbsup).await?;
+    msg.react(ctx, thumbsdown).await?;
+    Ok(())
 }
