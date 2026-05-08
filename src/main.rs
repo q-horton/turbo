@@ -146,6 +146,28 @@ async fn members(
     Ok(())
 }
 
+async fn is_server_stakeholder_channel(ctx: Context<'_>) -> Result<bool, Error> {
+    let stakeholder_channel_id = env::var("STAKEHOLDER_CHANNEL_ID")
+        .expect("Expected a stakeholder channel ID in the environment").parse::<u64>().unwrap();
+    let curr_channel_id = ctx.channel_id().get();
+    Ok(stakeholder_channel_id == curr_channel_id)
+}
+
+/// Actions the Emoji Vote command
+#[poise::command(slash_command, prefix_command,
+    check = "is_server_stakeholder_channel")]
+async fn emoji_vote(
+    ctx: Context<'_>,
+    img: serenity::Attachment
+) -> Result<(), Error> {
+    let img_url = &img.url;
+    let msg_reply = poise::CreateReply::default()
+        .content(COMMAND_UNDER_REPAIR)
+        .attachment(serenity::CreateAttachment::url(&ctx, img_url).await.unwrap());
+    ctx.send(msg_reply).await?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     // Pull in vars from '.env'
@@ -167,7 +189,8 @@ async fn main() {
                 votey(),
                 voteythumbs(),
                 aoc(),
-                members()
+                members(),
+                emoji_vote()
             ],
             prefix_options: poise::PrefixFrameworkOptions {
                 prefix: Some("!".into()),
