@@ -48,9 +48,8 @@ jobs:
         # If your VPS is x86_64 and you are certain about the glibc version,
         # you can switch to `x86_64-unknown-linux-gnu` and remove the musl steps.
  
-      - name: Install musl-tools (linker for static builds)
-        run: sudo apt-get install -y musl-tools
-        # Required to link against musl on the GitHub runner.
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
  
       - name: Cache Cargo registry & build artefacts
         uses: actions/cache@v4
@@ -70,9 +69,6 @@ jobs:
       - name: Build release binary
         run: |
           cargo build --release --target x86_64-unknown-linux-musl
-        env:
-          # Needed for the musl linker
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
         # DECISION: --release enables full optimisations (LTO, codegen-units=1
         # if configured). Discord bots are latency-sensitive; always ship release.
  
