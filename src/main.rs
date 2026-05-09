@@ -158,14 +158,11 @@ async fn is_server_stakeholder_channel(ctx: Context<'_>) -> Result<bool, Error> 
     check = "is_server_stakeholder_channel")]
 async fn emoji_vote(
     ctx: Context<'_>,
-    img: serenity::Attachment
+    img: serenity::Attachment,
+    emoji_name: String,
+    time_days: Option<u64>
 ) -> Result<(), Error> {
-    let img_url = &img.url;
-    let msg_reply = poise::CreateReply::default()
-        .content(COMMAND_UNDER_REPAIR)
-        .attachment(serenity::CreateAttachment::url(&ctx, img_url).await.unwrap());
-    ctx.send(msg_reply).await?;
-    Ok(())
+    utilities::emoji_vote(ctx, img, emoji_name, time_days.unwrap_or(3)).await
 }
 
 #[tokio::main]
@@ -177,6 +174,8 @@ async fn main() {
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
     // Set gateway intents, which decides what events the bot will be notified about
     let intents = serenity::GatewayIntents::GUILD_MESSAGES
+        | serenity::GatewayIntents::GUILD_MEMBERS
+        | serenity::GatewayIntents::GUILD_PRESENCES
         | serenity::GatewayIntents::DIRECT_MESSAGES
         | serenity::GatewayIntents::MESSAGE_CONTENT;
 
@@ -206,10 +205,10 @@ async fn main() {
                         .and_then(|v| v.parse::<u64>().ok())
                         .unwrap_or(0);
                     poise::builtins::register_in_guild(
-                    ctx,
-                    &framework.options().commands,
-                    serenity::GuildId::new(guild_id),
-                ).await?;
+                        ctx,
+                        &framework.options().commands,
+                        serenity::GuildId::new(guild_id),
+                    ).await?;
                 } else {
                     poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 }
