@@ -1,6 +1,6 @@
 use std::env;
  
-use ::serenity::all::EmojiId;
+use serenity::all::EmojiId;
 use serenity::async_trait;
 use serenity::model::channel::{Message, ReactionType};
 use serenity::model::gateway::Ready;
@@ -135,6 +135,9 @@ async fn aoc(
 async fn members(
     ctx: Context<'_>,
 ) -> Result<(), Error> {
+    // Give it time
+    ctx.defer().await?;
+
     let exec_role = env::var("EXEC_ROLE_ID").expect("Expected an executive role ID in the environment");
     if !ctx.author().has_role(&ctx, ctx.guild_id().unwrap(), exec_role.parse::<u64>().unwrap()).await? {
         ctx.reply("You need to be an exec to run the `members` command.").await?;

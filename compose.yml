@@ -1,0 +1,11 @@
+services:
+  turbo:
+    # Build from the current directory
+    build: .
+    
+    # Load environment variables
+    env_file:
+      - .env
+
+    # Automatically restart if program crashes or host restarts
+    restart: "unless-stopped"
