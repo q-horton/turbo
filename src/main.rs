@@ -59,8 +59,11 @@ impl serenity::EventHandler for Handler {
     // private channels, and more.
     //
     // In this case, just print what the current user's username is.
-    async fn ready(&self, _: serenity::Context, ready: Ready) {
+    async fn ready(&self, ctx: serenity::Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
+
+        let _ = utilities::create_emoji_db();
+        utilities::revive_all_emoji_votes(ctx.http.clone()).await;
     }
 }
 
