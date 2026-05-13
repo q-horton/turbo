@@ -1,5 +1,8 @@
 services:
   turbo:
+    # Defines the image to use, depending on whether deployed or local
+    image: ${IMAGE_TAG:-turbo:local}
+
     # Load environment variables
     env_file:
       - /etc/turbo/.env
