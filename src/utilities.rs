@@ -1,6 +1,7 @@
 use std::env;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use std::sync::Arc;
+use rusqlite::Connection;
 use serde_json::Value;
 
 use serenity::model::channel::*;
@@ -13,6 +14,7 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Context<'a> = poise::Context<'a, Data, Error>;
 
 const MAX_EMOJI_FILE_SIZE: u32 = 256_000;
+const DB_FILE_NAME: &str = "emoji-vote.db3";
 const DAY_IN_SEC: u64 = 86400;
 
 /// Votey Thumbs
@@ -49,8 +51,93 @@ pub async fn memberships() -> Result<String, reqwest::Error> {
     let quorum: i32 = val_b.as_str().unwrap().parse().unwrap();
 
     let msg: String = format!("There are currently {members} members of UQ MARS, making the current quorum {quorum}");
-    println!("{msg}");
     Ok(msg)
+}
+
+pub fn create_emoji_db() -> Result<(), Box<dyn std::error::Error>> {
+
+    let conn = Connection::open(DB_FILE_NAME)?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS emoji_votes (
+            id          INTEGER PRIMARY KEY,
+            emoji_name  TEXT NOT NULL,
+            msg_id      INTEGER,
+            channel_id  INTEGER,
+            guild_id    INTEGER,
+            end_time    INTEGER
+        ) STRICT;",
+        ()
+    )?;
+
+    Ok(())
+}
+
+pub fn insert_emoji_db(
+    emoji_name: &str,
+    msg_id: u64,
+    channel_id: u64,
+    guild_id: u64,
+    end_timestamp: u64
+) -> Result<(), Box<dyn std::error::Error>> {
+
+    let conn = Connection::open(DB_FILE_NAME)?;
+    
+    conn.execute(
+        "INSERT INTO emoji_votes (emoji_name, msg_id, channel_id, guild_id, end_time)
+            VALUES (?1, ?2, ?3, ?4, ?5);",
+        (emoji_name, msg_id, channel_id, guild_id, end_timestamp)
+    )?;
+
+    Ok(())
+}
+
+pub fn remove_emoji_db(
+    emoji_name: &str,
+    msg_id: u64
+) -> Result<(), Box<dyn std::error::Error>> {
+    
+    let conn = Connection::open(DB_FILE_NAME)?;
+    
+    conn.execute(
+        "DELETE FROM emoji_votes
+            WHERE emoji_name=?1 AND msg_id=?2;",
+        (emoji_name, msg_id)
+    )?;
+
+    Ok(())
+}
+
+struct EmojiVote {
+    emoji_name: String,
+    msg_id: u64,
+    channel_id: u64,
+    guild_id: u64,
+    end_time: u64
+}
+
+fn get_all_emoji_db() -> Result<Vec<EmojiVote>, Box<dyn std::error::Error>> {
+    let conn = Connection::open(DB_FILE_NAME)?;
+
+    let select_sql = "SELECT emoji_name, msg_id, channel_id, guild_id, end_time
+        FROM    emoji_votes";
+    let mut stmt = conn.prepare(select_sql)?;
+    let mut emoji_votes: Vec<EmojiVote> = Vec::new();
+    let vote_iter = stmt.query_map((), |row| {
+        Ok(EmojiVote {
+            emoji_name: row.get(0)?,
+            msg_id: row.get(1)?,
+            channel_id: row.get(2)?,
+            guild_id: row.get(3)?,
+            end_time: row.get(4)?,
+        })
+    })?;
+
+    for vote in vote_iter {
+        emoji_votes.push(vote.unwrap());
+    }
+    
+    Ok(emoji_votes)
 }
 
 fn is_valid_emoji_name(name: &str) -> bool {
@@ -81,13 +168,16 @@ fn check_attachment(img: &serenity::Attachment) -> Option<String> {
 
 async fn vote_counting(
     http: Arc<serenity::Http>,
+    guild: GuildId,
     chann_id: ChannelId,
     msg_id: MessageId,
-    guild: GuildId,
-    img: CreateAttachment,
     emoji_name: &str
 ) {
+    let _ = remove_emoji_db(emoji_name, msg_id.get());
+    
     let message = chann_id.message(&http, msg_id).await.unwrap();
+    let img_attachment = message.attachments.first().unwrap();
+    let img = CreateAttachment::url(&http, &img_attachment.url).await.unwrap();
     let mut yays: u64 = 0;
     let mut nays: u64 = 0;
     for reaction in &message.reactions {
@@ -121,6 +211,38 @@ async fn vote_counting(
     }
 }
 
+pub async fn revive_all_emoji_votes(http: Arc<serenity::Http>) {
+    let votes = get_all_emoji_db().unwrap();
+    let curr_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(); 
+
+    for vote in votes {
+        let http_dup = http.clone();
+        if vote.end_time < SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() {
+            tokio::spawn(async move {
+                vote_counting(
+                    http_dup, 
+                    GuildId::from(vote.guild_id), 
+                    ChannelId::from(vote.channel_id),
+                    MessageId::from(vote.msg_id),
+                    &vote.emoji_name
+                ).await;
+            });
+        } else {
+            let duration = vote.end_time - curr_time;
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(duration)).await;
+                vote_counting(
+                    http_dup, 
+                    GuildId::from(vote.guild_id), 
+                    ChannelId::from(vote.channel_id),
+                    MessageId::from(vote.msg_id),
+                    &vote.emoji_name
+                ).await;
+            });
+        }
+    }
+}
+
 pub async fn emoji_vote(
     ctx: Context<'_>,
     img: serenity::Attachment,
@@ -138,7 +260,6 @@ pub async fn emoji_vote(
     }
     let msg_txt: String = format!("`:{}:`, yay or nay?", emoji_name);
     let img_attachment = serenity::CreateAttachment::url(&ctx, img_url).await.unwrap();
-    let img_attachment_dup = img_attachment.clone();
     let msg_reply = poise::CreateReply::default()
         .content(msg_txt)
         .attachment(img_attachment);
@@ -151,9 +272,13 @@ pub async fn emoji_vote(
     let msg_id = msg.id;
     let guild = ctx.guild_id().unwrap();
 
+    let duration = time_days * DAY_IN_SEC;
+    let end_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() + duration;
+    let _ = insert_emoji_db(emoji_name.as_str(), msg_id.get(), chann_id.get(), guild.get(), end_time);
+
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(time_days * DAY_IN_SEC)).await;
-        vote_counting(http, chann_id, msg_id, guild, img_attachment_dup, &emoji_name).await;
+        tokio::time::sleep(Duration::from_secs(duration)).await;
+        vote_counting(http, guild, chann_id, msg_id, &emoji_name).await;
     });
 
     Ok(())

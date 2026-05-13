@@ -1,6 +1,6 @@
 use std::env;
  
-use ::serenity::all::EmojiId;
+use serenity::all::EmojiId;
 use serenity::async_trait;
 use serenity::model::channel::{Message, ReactionType};
 use serenity::model::gateway::Ready;
@@ -59,8 +59,11 @@ impl serenity::EventHandler for Handler {
     // private channels, and more.
     //
     // In this case, just print what the current user's username is.
-    async fn ready(&self, _: serenity::Context, ready: Ready) {
+    async fn ready(&self, ctx: serenity::Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
+
+        let _ = utilities::create_emoji_db();
+        utilities::revive_all_emoji_votes(ctx.http.clone()).await;
     }
 }
 
@@ -135,6 +138,9 @@ async fn aoc(
 async fn members(
     ctx: Context<'_>,
 ) -> Result<(), Error> {
+    // Give it time
+    ctx.defer().await?;
+
     let exec_role = env::var("EXEC_ROLE_ID").expect("Expected an executive role ID in the environment");
     if !ctx.author().has_role(&ctx, ctx.guild_id().unwrap(), exec_role.parse::<u64>().unwrap()).await? {
         ctx.reply("You need to be an exec to run the `members` command.").await?;
