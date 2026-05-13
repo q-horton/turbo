@@ -1,186 +1,114 @@
-name: Build & Deploy Discord Bot
- 
+name: Build, Push & Deploy Discord Bot
+
 on:
   push:
     branches:
-      - main      # → production VPS
-  workflow_dispatch: # Allows manual runs from the GitHub Actions UI
+      - master
+  workflow_dispatch:
 
 env:
-  # The name of the compiled binary (matches `name` in your Cargo.toml [[bin]])
-  BINARY_NAME: turbo
-  # Remote path where the binary will live
-  DEPLOY_PATH: /opt/turbo
-  # systemd service name on the VPS
-  SERVICE_NAME: turbo
-  # SSH user on the VPS
-  DEPLOY_USER: deploy
+  # GitHub's own container registry — free for public repos, included for private.
+  # Alternative: docker.io (Docker Hub) or a self-hosted registry.
+  REGISTRY: ghcr.io
+  # github.repository is "youruser/yourrepo", lowercased automatically below
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # -------------------------------------------------------------------------
-  # JOB 1: BUILD
-  # Compiles a release binary for the VPS target architecture.
-  # -------------------------------------------------------------------------
-  build:
-    name: Build (release)
+  build-and-push:
+    name: Build & push image
     runs-on: ubuntu-latest
-    # DECISION: ubuntu-latest is the most compatible GitHub-hosted runner for
-    # cross-compiling to Linux targets. It also matches a typical VPS OS.
- 
+    # Needed so the job can push to GHCR using the built-in GITHUB_TOKEN
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        # DECISION: v4 is the current stable major version of the checkout action.
- 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
-        # DECISION: dtolnay/rust-toolchain is the community-standard action for
-        # Rust; it respects rust-toolchain.toml if you have one.
-        #
-        # DECISION (musl target): We compile against musl libc instead of glibc.
-        # This produces a fully static binary with zero runtime dependencies,
-        # meaning the binary runs on any Linux VPS regardless of glibc version.
-        # Trade-off: slightly larger binary and marginally slower at startup,
-        # but eliminates "GLIBC_X.YY not found" errors entirely.
-        #
-        # If your VPS is x86_64 and you are certain about the glibc version,
-        # you can switch to `x86_64-unknown-linux-gnu` and remove the musl steps.
- 
-      - name: Install Zig
-        uses: mlugg/setup-zig@v1
 
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          # DECISION: GITHUB_TOKEN is auto-provided by Actions — no manual
+          # secret needed for GHCR. Docker Hub would require a PAT in secrets.
 
-      - name: Cache Cargo registry & build artefacts
-        uses: actions/cache@v4
+      - name: Extract image metadata (tags & labels)
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-        # DECISION: Caching the Cargo registry and the `target` directory
-        # dramatically reduces build times on subsequent runs (serenity +
-        # poise pull in many crates). The cache key is keyed on Cargo.lock so
-        # it invalidates whenever dependencies change.
- 
-      - name: Build release binary
-        run: |
-          cargo zigbuild --release --target x86_64-unknown-linux-musl
-        # DECISION: --release enables full optimisations (LTO, codegen-units=1
-        # if configured). Discord bots are latency-sensitive; always ship release.
- 
-      - name: Upload binary as workflow artefact
-        uses: actions/upload-artifact@v4
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=short
+            type=ref,event=branch
+          # DECISION: We tag with the short commit SHA (e.g. "sha-a1b2c3d")
+          # AND the branch name ("main"/"staging"). The deploy job uses the
+          # SHA tag so each deploy is pinned to an exact, immutable image.
+          # The branch tag is a convenience pointer for humans.
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        # DECISION: Buildx enables BuildKit, which is required for multi-stage
+        # builds and layer caching. Also required for the cache-to/cache-from
+        # flags below.
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
         with:
-          name: ${{ env.BINARY_NAME }}
-          path: target/x86_64-unknown-linux-musl/release/${{ env.BINARY_NAME }}
-          retention-days: 7
-        # DECISION: Passing the binary through GitHub's artifact store decouples
-        # the build job from the deploy job. This means:
-        #   - If deploy fails, you can re-run only the deploy job.
-        #   - The build log and the deploy log are separate and easier to read.
- 
-  # -------------------------------------------------------------------------
-  # JOB 2: DEPLOY
-  # Copies the binary to the VPS and restarts the systemd service.
-  # Only runs after a successful build, and only on specific branches.
-  # -------------------------------------------------------------------------
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # DECISION: `type=gha` stores the Docker layer cache in GitHub's
+          # Actions cache. This means the dependency-caching trick in the
+          # Dockerfile (dummy main.rs) is effective across workflow runs —
+          # deps only recompile when Cargo.toml/Cargo.lock changes.
+
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
-    needs: build
-    # DECISION: `needs: build` creates an explicit dependency — deploy will
-    # never run if the build job fails or is skipped.
- 
-    # Determine which environment (and therefore which secrets) to use based
-    # on the branch being pushed to.
-    environment: ${{ github.ref_name == 'main' && 'production' }}
-    # DECISION: GitHub Environments let you store per-environment secrets
-    # (VPS host, SSH key) and optionally require manual approval before
-    # production deploys. Set these up under:
-    # Settings → Environments → production / staging
- 
+    needs: build-and-push
+    # environment: ${{ github.ref_name == 'master' && 'production' || 'staging' }}
+
     steps:
-      - name: Download binary artefact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.BINARY_NAME }}
-          path: ./artifact
- 
-      - name: Make binary executable
-        run: chmod +x ./artifact/${{ env.BINARY_NAME }}
-        # download-artifact does not preserve file permissions.
- 
       - name: Set up SSH agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
-        # DECISION: ssh-agent loads the key into memory for the duration of
-        # the job, avoiding the need to pass -i flags to every scp/ssh call
-        # and preventing the key from being written to disk in plaintext.
-        #
-        # SECRET REQUIRED: VPS_SSH_PRIVATE_KEY
-        #   → The private half of an SSH key pair.
-        #   → Add via: Settings → Secrets → Actions (or inside the Environment).
-        #   → On your VPS, add the PUBLIC key to ~deploy/.ssh/authorized_keys.
- 
+
       - name: Add VPS to known_hosts
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
-        # DECISION: ssh-keyscan populates known_hosts so SSH does not prompt
-        # "Are you sure you want to continue connecting?", which would hang CI.
-        # The -H flag hashes the hostname for a small security benefit.
-        #
-        # SECRET REQUIRED: VPS_HOST
-        #   → The IP address or hostname of your VPS (e.g. "123.45.67.89").
- 
-      - name: Copy binary to VPS
+
+      - name: Pull image and restart container
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
+          REGISTRY: ${{ env.REGISTRY }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          scp ./artifact/${{ env.BINARY_NAME }} \
-            ${{ env.DEPLOY_USER }}@${{ secrets.VPS_HOST }}:${{ env.DEPLOY_PATH }}/${{ env.BINARY_NAME }}.new
-        # DECISION: We copy to a .new file first (atomic swap pattern).
-        # If scp fails mid-transfer, the currently running binary is untouched.
- 
-      - name: Swap binary and restart service
-        run: |
-          ssh ${{ env.DEPLOY_USER }}@${{ secrets.VPS_HOST }} << 'EOF'
+          ssh deploy@${{ secrets.VPS_HOST }} << EOF
             set -euo pipefail
- 
-            # Atomically replace the old binary
-            mv ${{ env.DEPLOY_PATH }}/${{ env.BINARY_NAME }}.new \
-               ${{ env.DEPLOY_PATH }}/${{ env.BINARY_NAME }}
- 
-            # Restart the systemd service
-            sudo systemctl restart ${{ env.SERVICE_NAME }}
- 
-            # Wait up to 10 seconds for the service to reach "active"
-            sleep 3
-            systemctl is-active --quiet ${{ env.SERVICE_NAME }} \
-              && echo "✅ Service is running" \
-              || { echo "❌ Service failed to start"; journalctl -u ${{ env.SERVICE_NAME }} -n 30 --no-pager; exit 1; }
+
+            # Log in to GHCR so the VPS can pull the image
+            echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+            # Inject the pinned image tag into the compose file, then bring
+            # the service up. --pull always ensures the new image is used even
+            # if a container with the same name is already running.
+            cd /opt/discord-bot
+            IMAGE_TAG=$IMAGE docker compose up -d --pull always --wait
+
+            # --wait blocks until the healthcheck reports healthy (or fails),
+            # so we get a meaningful success/failure signal rather than just
+            # "container started". Requires Docker Compose 2.1+.
+            echo "✅ Deployment complete"
           EOF
-        # DECISION: `set -euo pipefail` makes the remote script fail fast on
-        # any error instead of silently continuing.
-        #
-        # DECISION: The post-restart health check (`systemctl is-active`) gives
-        # you an immediate signal in the CI log if the new binary crashes on
-        # startup (e.g. bad token, missing env var). Without this, the job
-        # would show green even if the bot is down.
-        #
-        # SUDO NOTE: The deploy user needs passwordless sudo for exactly this
-        # command. Add to /etc/sudoers on the VPS (using `visudo`):
-        #   deploy ALL=(ALL) NOPASSWD: /bin/systemctl restart discord-bot
- 
-      - name: Notify on failure (optional)
-        if: failure()
-        run: |
-          echo "Deploy failed — consider adding a Discord webhook notification here."
-        # EXTENSION POINT: Replace the echo with a curl call to a Discord
-        # webhook to alert your team on deploy failure.
