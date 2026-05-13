@@ -1,8 +1,5 @@
 services:
   turbo:
-    # Build from the current directory
-    build: .
-    
     # Load environment variables
     env_file:
       - /etc/turbo/.env
