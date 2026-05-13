@@ -88,6 +88,13 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
 
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Copy compose file to VPS
+        run: |
+          scp compose.yml deploy@${{ secrets.VPS_HOST }}:/opt/turbo/compose.yml
+
       - name: Pull image and restart container
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}

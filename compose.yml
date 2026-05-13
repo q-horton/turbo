@@ -5,7 +5,7 @@ services:
     
     # Load environment variables
     env_file:
-      - .env
+      - /etc/turbo/.env
 
     # Automatically restart if program crashes or host restarts
     restart: "unless-stopped"
