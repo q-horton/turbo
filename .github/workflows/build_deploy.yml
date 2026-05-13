@@ -104,7 +104,7 @@ jobs:
             # Inject the pinned image tag into the compose file, then bring
             # the service up. --pull always ensures the new image is used even
             # if a container with the same name is already running.
-            cd /opt/discord-bot
+            cd /opt/turbo
             IMAGE_TAG=$IMAGE docker compose up -d --pull always --wait
 
             # --wait blocks until the healthcheck reports healthy (or fails),
